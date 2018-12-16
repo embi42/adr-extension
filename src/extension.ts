@@ -4,29 +4,43 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as mkdirp from 'mkdirp';
 
-function checkAdrFolder(): string | undefined {
-    if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
-        var rootPath = vscode.workspace.workspaceFolders[0].uri.fsPath;
-        var adrPath = path.join(rootPath, "doc/adr");
-        if (!fs.existsSync(adrPath)) {
-            mkdirp.sync(adrPath);
-        }
-        return adrPath;
-    }
-    else {
-        return undefined;
-    }
-}
+const AdrDefaultDirectoryPath = "doc/adr";
 
-function getMaxAdrIndexInFolder(adrPath:string): number {
-    var maxAdrIndex = 0;
-    fs.readdirSync(adrPath).forEach(file => {
-        var prefix = Number(file.substring(0,4));
-        if (prefix > maxAdrIndex) {
-            maxAdrIndex = prefix;
+function checkAdrFolder(): Promise<any> {
+    return new Promise((resolve, reject) => {
+        if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+            var rootPath = vscode.workspace.workspaceFolders[0].uri.fsPath;
+            var adrPath = path.join(rootPath, AdrDefaultDirectoryPath);
+            fs.exists(adrPath, function(exists) {
+                if (!exists) {
+                    mkdirp(adrPath, function(err) {
+                        if (!err) {
+                            resolve(adrPath);
+                        }
+                    });
+                } else {
+                    resolve(adrPath);
+                }
+            });
+        } else {
+            reject();
         }
     });
-    return maxAdrIndex;
+}
+
+function getMaxAdrIndexInFolder(adrPath:string): Promise<any> {
+    return new Promise((resolve, reject) => {
+        var maxAdrIndex = 0;
+        fs.readdir(adrPath, function(err, files) {
+            files.forEach(file => {
+                var prefix = Number(file.substring(0,4));
+                if (prefix > maxAdrIndex) {
+                    maxAdrIndex = prefix;
+                }
+            });
+            resolve(maxAdrIndex);
+        });
+    });
 }
 
 function padStartWithZero( text: string, width: number )
@@ -60,24 +74,42 @@ function createAdrFileContent(index: number, text: string): string {
     "## Konsequenzen\r\n\r\n";
 }
 
-function createNextAdrEntry(adrPath:string, maxAdrIndex: number, text: string): string {
-    var nextIndex = maxAdrIndex+1;
-    var filenameText = text.replace(/\s/g, '-').toLowerCase();
-    var fileName = padStartWithZero(nextIndex.toString(), 4)+"-"+filenameText+".md";
-    var fullPath = adrPath+"/"+fileName;
-    var adrContent = createAdrFileContent(nextIndex, text);
-    fs.appendFileSync(fullPath, adrContent);
-    vscode.workspace.openTextDocument(fullPath)
+function createNextAdrEntry(adrPath:string, maxAdrIndex: number, text: string): Promise<any> {
+    return new Promise(function(resolve, reject) {
+        var nextIndex = maxAdrIndex+1;
+        var filenameText = text.replace(/\s/g, '-').toLowerCase();
+        var fileName = padStartWithZero(nextIndex.toString(), 4)+"-"+filenameText+".md";
+        var fullPath = adrPath+"/"+fileName;
+        var adrContent = createAdrFileContent(nextIndex, text);
+        fs.appendFile(fullPath, adrContent, function (err) {
+            if (err) {reject();}
+            else {resolve(fullPath);}
+        });
+    });
+}
+
+function openAdrEntry(entryPath:string): void {
+    vscode.workspace.openTextDocument(entryPath)
         .then(textDocument => vscode.window.showTextDocument(textDocument));
-    return fileName;
 }
 
 // function createSnippetItem(): vscode.CompletionItem {
-//     let item = new vscode.CompletionItem('Good part of the day', vscode.CompletionItemKind.Snippet);
-//     item.insertText = new vscode.SnippetString("Good ${1|morning,afternoon,evening|}. It is ${1}, right?");
-//     item.documentation = new vscode.MarkdownString("Inserts a snippet that lets you select the _appropriate_ part of the day for your greeting.");
+//     return {
+//         label: 'adr',
+//         documentation: 'Architecture Decision Records Markdown template',
+//         kind: vscode.CompletionItemKind.Snippet,
+//         insertText: `
+//   # teszt
+  
+//   ## masik teszt
+//   `
+//       };
 
-//     return item;
+//     // let item = new vscode.CompletionItem('Good part of the day', vscode.CompletionItemKind.Snippet);
+//     // item.insertText = new vscode.SnippetString("Good ${1|morning,afternoon,evening|}. It is ${1}, right?");
+//     // item.documentation = new vscode.MarkdownString("Inserts a snippet that lets you select the _appropriate_ part of the day for your greeting.");
+
+//     // return item;
 // }
 
 export function activate(context: vscode.ExtensionContext) {
@@ -93,12 +125,18 @@ export function activate(context: vscode.ExtensionContext) {
     let disposable = vscode.commands.registerCommand('extension.createAdrEntry', async () => {
         let entry = await vscode.window.showInputBox({prompt: "Title of ADR Entry:"});
         if (entry) {
-            vscode.window.showInformationMessage(entry);
-            var adrFolder = checkAdrFolder();
-            if (adrFolder) {
-                var maxAdrIndex = getMaxAdrIndexInFolder(adrFolder);
-                createNextAdrEntry(adrFolder, maxAdrIndex, entry);
-            }
+            checkAdrFolder()
+                .then(adrPath => {
+                    getMaxAdrIndexInFolder(adrPath)
+                        .then(maxAdrIndex => {
+                            createNextAdrEntry(adrPath, maxAdrIndex, <string>entry)
+                                .then(adrFilePath => {
+                                    openAdrEntry(adrFilePath);
+                                });
+                        }
+                    );
+                }
+            );
         }
     });
 
